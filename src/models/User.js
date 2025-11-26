@@ -31,7 +31,8 @@ const userSchema = new mongoose.Schema({
     enum: ['admin', 'director', 'teacher', 'parent', 'student']
   },
   phone: {
-    type: String
+    type: String,
+    trim: true
   },
   school: {
     type: mongoose.Schema.Types.ObjectId,
@@ -49,8 +50,13 @@ const userSchema = new mongoose.Schema({
   lastLogin: {
     type: Date
   },
+  passwordChangedAt: Date,
   passwordResetToken: String,
-  passwordResetExpires: Date
+  passwordResetExpires: Date,
+  createdBy: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User'
+  }
 }, {
   timestamps: true
 });
@@ -61,8 +67,22 @@ userSchema.pre('save', async function(next) {
   next();
 });
 
+userSchema.pre('save', function(next) {
+  if (!this.isModified('password') || this.isNew) return next();
+  this.passwordChangedAt = Date.now() - 1000;
+  next();
+});
+
 userSchema.methods.correctPassword = async function(candidatePassword, userPassword) {
   return await bcrypt.compare(candidatePassword, userPassword);
+};
+
+userSchema.methods.changedPasswordAfter = function(JWTTimestamp) {
+  if (this.passwordChangedAt) {
+    const changedTimestamp = parseInt(this.passwordChangedAt.getTime() / 1000, 10);
+    return JWTTimestamp < changedTimestamp;
+  }
+  return false;
 };
 
 // Auto-approve admins and directors

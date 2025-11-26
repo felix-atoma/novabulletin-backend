@@ -3,9 +3,11 @@ const express = require("express");
 const cors = require("cors");
 const helmet = require("helmet");
 const rateLimit = require("express-rate-limit");
+const path = require("path");
 
 // Import routes
 const authRoutes = require("./routes/auth");
+const adminRoutes = require("./routes/adminRoutes");
 const schoolRoutes = require("./routes/school.routes");
 const studentRoutes = require("./routes/students");
 const parentRoutes = require("./routes/parent.routes");
@@ -94,6 +96,15 @@ app.use(express.urlencoded({ extended: true, limit: "10mb" }));
 app.use("/uploads", express.static("uploads"));
 app.use("/public", express.static("public"));
 
+// Create uploads directories if they don't exist
+const fs = require('fs');
+const uploadDirs = ['uploads', 'uploads/bulletins', 'uploads/certificates', 'uploads/reports'];
+uploadDirs.forEach(dir => {
+  if (!fs.existsSync(dir)) {
+    fs.mkdirSync(dir, { recursive: true });
+  }
+});
+
 /* -------------------------------------------------
    DEV LOGGING
 ------------------------------------------------- */
@@ -115,6 +126,7 @@ if (process.env.NODE_ENV !== "production") {
    API ROUTES
 ------------------------------------------------- */
 app.use("/api/v1/auth", authRoutes);
+app.use("/api/v1/admin", adminRoutes);
 app.use("/api/v1/schools", schoolRoutes);
 app.use("/api/v1/students", studentRoutes);
 app.use("/api/v1/parents", parentRoutes);
@@ -137,7 +149,7 @@ app.get("/api/health", (req, res) => {
     message: "NovaBulletin API (Togolese System) is running 🇹🇬",
     timestamp: new Date().toISOString(),
     environment: process.env.NODE_ENV || "development",
-    version: "2.0.0",
+    version: "2.1.0",
     uptime: process.uptime(),
     memory: process.memoryUsage(),
     database: process.env.NODE_ENV === "test" ? "test" : "production",
@@ -146,7 +158,10 @@ app.get("/api/health", (req, res) => {
       interrogations_tracking: true,
       automatic_moyenne_calculation: true,
       coefficient_by_series: true,
-      bulletin_generation: true
+      bulletin_generation: true,
+      super_admin_management: true,
+      platform_wide_management: true,
+      pdf_generation: true // ADDED: PDF feature
     }
   });
 });
@@ -157,6 +172,7 @@ app.get("/api/health", (req, res) => {
 app.get("/api/status", (req, res) => {
   const routes = [
     { path: "/api/v1/auth", methods: ["POST", "GET"], description: "Authentication & user management" },
+    { path: "/api/v1/admin", methods: ["GET", "POST", "PATCH"], description: "Super admin platform management" },
     { path: "/api/v1/schools", methods: ["GET", "POST", "PATCH", "DELETE"], description: "School management" },
     { path: "/api/v1/students", methods: ["GET", "POST", "PATCH", "DELETE"], description: "Student management" },
     { path: "/api/v1/parents", methods: ["GET", "POST", "PATCH", "DELETE"], description: "Parent management" },
@@ -178,7 +194,11 @@ app.get("/api/status", (req, res) => {
     },
     { path: "/api/v1/statistics", methods: ["GET"], description: "Academic statistics" },
     { path: "/api/v1/payments", methods: ["GET", "POST", "PATCH", "DELETE"], description: "Payment processing" },
-    { path: "/api/v1/pdf", methods: ["POST"], description: "PDF document generation" },
+    { 
+      path: "/api/v1/pdf", 
+      methods: ["GET", "POST"], 
+      description: "PDF document generation (bulletins, certificates, reports)"
+    },
     { path: "/api/v1/registrations", methods: ["GET", "POST", "PATCH"], description: "Registration approval" },
     { path: "/api/v1/dashboard", methods: ["GET"], description: "Dashboard statistics" }
   ];
@@ -186,12 +206,16 @@ app.get("/api/status", (req, res) => {
   res.status(200).json({
     status: "success",
     message: "NovaBulletin API Status - Système Togolais 🇹🇬",
-    version: "2.0.0",
+    version: "2.1.0",
     environment: process.env.NODE_ENV || "development",
     timestamp: new Date().toISOString(),
     endpoints: routes,
     features: {
       authentication: true,
+      super_admin_management: true,
+      platform_wide_control: true,
+      user_management: true,
+      school_management: true,
       student_management: true,
       grade_management: true,
       togolese_grading_system: true,
@@ -204,7 +228,21 @@ app.get("/api/status", (req, res) => {
       statistics: true,
       multi_role_support: true,
       registration_approval: true,
-      pdf_generation: true
+      pdf_generation: true // ADDED: PDF feature
+    },
+    admin_features: {
+      super_admin: {
+        platform_statistics: true,
+        user_management: true,
+        school_management: true,
+        registration_approval: true,
+        bulk_operations: true
+      },
+      school_director: {
+        school_management: true,
+        user_approval: true,
+        academic_management: true
+      }
     },
     education_system: {
       levels: ["maternelle", "primaire", "college", "seconde", "premiere", "terminale"],
@@ -233,17 +271,20 @@ app.get("/api/status", (req, res) => {
 app.get("/", (req, res) => {
   res.json({
     message: "Bienvenue sur NovaBulletin API - Système Éducatif Togolais 🇹🇬",
-    version: "2.0.0",
+    version: "2.1.0",
     environment: process.env.NODE_ENV || "development",
     documentation: "Voir /api/status pour les détails des endpoints",
     system_info: {
       grading_system: "Togolese (0-20 scale)",
       interrogations: "Minimum 2 + 1 Composition",
       automatic_calculation: "Moyenne automatique",
-      coefficient_support: "Par série et niveau"
+      coefficient_support: "Par série et niveau",
+      admin_management: "Super admin + School director roles",
+      pdf_generation: "Bulletins, certificats, rapports" // ADDED: PDF info
     },
     endpoints: {
       auth: "/api/v1/auth",
+      admin: "/api/v1/admin",
       schools: "/api/v1/schools",
       students: "/api/v1/students",
       parents: "/api/v1/parents",
@@ -260,15 +301,25 @@ app.get("/", (req, res) => {
       status: "/api/status"
     },
     key_features: [
+      "👑 Super Admin - Gestion complète de la plateforme",
+      "🏫 Directeurs - Gestion d'école",
       "📝 Système de notation togolais (0-20)",
       "📊 2-3 interrogations + composition",
       "🎯 Calcul automatique des moyennes",
       "📚 Coefficients par série (A1-F5)",
       "📄 Génération automatique de bulletins",
+      "📑 Génération de PDF (bulletins, certificats)", // ADDED: PDF feature
       "🏆 Mentions (Très Bien à Insuffisant)",
       "👥 Support multi-rôles",
       "💰 Gestion des paiements",
       "📈 Statistiques académiques"
+    ],
+    admin_capabilities: [
+      "📊 Statistiques de la plateforme",
+      "👥 Gestion de tous les utilisateurs",
+      "🏫 Création et gestion des écoles",
+      "✅ Approbation des inscriptions",
+      "🔧 Configuration système"
     ]
   });
 });
@@ -294,6 +345,48 @@ app.get("/api/education-system", (req, res) => {
         { range: "10-12", mention: "Passable", description: "Travail acceptable" },
         { range: "0-10", mention: "Insuffisant", description: "Travail insuffisant" }
       ],
+      user_roles: {
+        admin: {
+          description: "Administrateur de la plateforme",
+          permissions: [
+            "Gestion complète de toutes les écoles",
+            "Création de tous types d'utilisateurs",
+            "Statistiques de la plateforme",
+            "Configuration système"
+          ]
+        },
+        director: {
+          description: "Directeur d'école",
+          permissions: [
+            "Gestion de son école",
+            "Approbation des enseignants/élèves",
+            "Gestion académique",
+            "Statistiques de l'école"
+          ]
+        },
+        teacher: {
+          description: "Enseignant",
+          permissions: [
+            "Saisie des notes",
+            "Consultation des classes",
+            "Génération de bulletins"
+          ]
+        },
+        student: {
+          description: "Élève",
+          permissions: [
+            "Consultation de ses notes",
+            "Téléchargement de bulletins"
+          ]
+        },
+        parent: {
+          description: "Parent",
+          permissions: [
+            "Suivi des résultats de son enfant",
+            "Consultation des bulletins"
+          ]
+        }
+      },
       structure: {
         maternelle: {
           description: "École maternelle",
@@ -364,6 +457,25 @@ app.all("*", (req, res) => {
       "POST /api/v1/auth/register",
       "POST /api/v1/auth/login",
       "GET /api/v1/auth/me",
+      // Admin endpoints
+      "POST /api/v1/admin/setup/first-admin",
+      "GET /api/v1/admin/users",
+      "POST /api/v1/admin/users",
+      "PATCH /api/v1/admin/users/:userId/status",
+      "GET /api/v1/admin/schools",
+      "POST /api/v1/admin/schools",
+      "PATCH /api/v1/admin/schools/:schoolId",
+      "GET /api/v1/admin/stats",
+      "GET /api/v1/admin/registrations/pending",
+      "PATCH /api/v1/admin/registrations/approve/:userId",
+      "PATCH /api/v1/admin/registrations/reject/:userId",
+      // PDF endpoints (ADDED)
+      "POST /api/v1/pdf/generate/bulletin",
+      "POST /api/v1/pdf/generate/certificate", 
+      "POST /api/v1/pdf/generate/report",
+      "GET /api/v1/pdf/download/:filename",
+      "GET /api/v1/pdf/health",
+      // Existing endpoints
       "GET /api/v1/dashboard/stats",
       "GET /api/v1/dashboard/activity",
       "POST /api/v1/schools",

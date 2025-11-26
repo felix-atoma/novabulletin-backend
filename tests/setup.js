@@ -1,8 +1,6 @@
 // tests/setup.js
 const mongoose = require('mongoose');
 const dotenv = require('dotenv');
-require('jest-extended');
-
 
 // Load test environment variables
 dotenv.config({ path: '.env.test' });
@@ -39,26 +37,9 @@ beforeAll(async () => {
   }
 });
 
-// Cleanup after each test
-afterEach(async () => {
-  try {
-    if (mongoose.connection.readyState === 1) {
-      const collections = mongoose.connection.collections;
-      
-      // Clear all collections
-      for (const key in collections) {
-        const collection = collections[key];
-        try {
-          await collection.deleteMany({});
-        } catch (error) {
-          console.warn(`⚠️ Could not clear collection ${key}:`, error.message);
-        }
-      }
-    }
-  } catch (error) {
-    console.error('❌ Error cleaning test data:', error.message);
-  }
-});
+// ✅ REMOVED afterEach - DO NOT DELETE DATA BETWEEN TESTS
+// This was causing the user to be deleted after registration
+// Each test file should manage its own cleanup in beforeAll/afterAll
 
 // Cleanup after all tests
 afterAll(async () => {

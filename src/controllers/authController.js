@@ -1,3 +1,4 @@
+// controllers/authController.js
 const User = require('../models/User');
 const School = require('../models/School');
 const Parent = require('../models/Parent');
@@ -46,6 +47,501 @@ const generateUniqueId = async (prefix, model, idField) => {
   return newId;
 };
 
+// ==================== SUPER ADMIN FUNCTIONS ====================
+
+// Create first admin user (one-time setup)
+exports.createFirstAdmin = async (req, res) => {
+  try {
+    const { email, password, firstName, lastName, phone } = req.body;
+
+    if (!email || !password || !firstName || !lastName) {
+      return res.status(400).json({
+        status: 'error',
+        message: 'Tous les champs obligatoires doivent être remplis'
+      });
+    }
+
+    // Check if admin already exists
+    const existingAdmin = await User.findOne({ role: 'admin' });
+    if (existingAdmin) {
+      return res.status(400).json({
+        status: 'error',
+        message: 'Un administrateur existe déjà dans le système'
+      });
+    }
+
+    // Check if email already exists
+    const existingUser = await User.findOne({ email });
+    if (existingUser) {
+      return res.status(400).json({
+        status: 'error',
+        message: 'Un utilisateur avec cet email existe déjà'
+      });
+    }
+
+    const adminUser = await User.create({
+      email,
+      password,
+      firstName,
+      lastName,
+      phone: phone || '',
+      role: 'admin'
+    });
+
+    res.status(201).json({
+      status: 'success',
+      message: 'Administrateur principal créé avec succès',
+      data: { user: adminUser }
+    });
+  } catch (error) {
+    console.error('Create first admin error:', error);
+    res.status(400).json({
+      status: 'error',
+      message: 'Erreur lors de la création de l\'administrateur: ' + error.message
+    });
+  }
+};
+
+// Admin creates user (admin can create any type of user)
+exports.adminCreateUser = async (req, res) => {
+  try {
+    const {
+      email,
+      password,
+      firstName,
+      lastName,
+      role,
+      phone,
+      schoolId,
+      teacherId,
+      studentId,
+      additionalData
+    } = req.body;
+
+    if (!email || !password || !firstName || !lastName || !role) {
+      return res.status(400).json({
+        status: 'error',
+        message: 'Tous les champs obligatoires doivent être remplis'
+      });
+    }
+
+    // Check if user already exists
+    const existingUser = await User.findOne({ email });
+    if (existingUser) {
+      return res.status(400).json({
+        status: 'error',
+        message: 'Un utilisateur avec cet email existe déjà'
+      });
+    }
+
+    let school;
+    if (schoolId) {
+      school = await School.findById(schoolId);
+      if (!school) {
+        return res.status(400).json({
+          status: 'error',
+          message: 'École introuvable'
+        });
+      }
+    }
+
+    // Create user with admin as creator
+    const newUser = await User.create({
+      email,
+      password,
+      firstName,
+      lastName,
+      role,
+      phone: phone || '',
+      school: schoolId || null,
+      createdBy: req.user._id
+    });
+
+    // Handle role-specific creation
+    if (role === 'director' && schoolId) {
+      await School.findByIdAndUpdate(schoolId, { director: newUser._id });
+    } else if (role === 'teacher') {
+      const finalTeacherId = teacherId || await generateUniqueId('TCH', Teacher, 'teacherId');
+      await Teacher.create({
+        user: newUser._id,
+        teacherId: finalTeacherId,
+        school: schoolId || null,
+        registrationStatus: 'approved',
+        isActive: true
+      });
+    } else if (role === 'student') {
+      const finalStudentId = studentId || await generateUniqueId('STU', Student, 'studentId');
+      await Student.create({
+        user: newUser._id,
+        studentId: finalStudentId,
+        school: schoolId || null,
+        dateOfBirth: additionalData?.dateOfBirth || new Date('2000-01-01'),
+        gender: additionalData?.gender || 'male',
+        class: additionalData?.classId || null,
+        level: additionalData?.level || 'college',
+        series: additionalData?.series || null,
+        enrollmentDate: new Date(),
+        isActive: true
+      });
+    } else if (role === 'parent') {
+      await Parent.create({
+        user: newUser._id,
+        phone: phone || '',
+        address: additionalData?.address || 'Non spécifié',
+        school: schoolId || null
+      });
+    }
+
+    await newUser.populate('school');
+
+    res.status(201).json({
+      status: 'success',
+      message: 'Utilisateur créé avec succès',
+      data: { user: newUser }
+    });
+  } catch (error) {
+    console.error('Admin create user error:', error);
+    
+    if (error.code === 11000) {
+      const field = Object.keys(error.keyPattern)[0];
+      const message = field === 'email' 
+        ? 'Cette adresse email est déjà utilisée'
+        : 'Cette valeur existe déjà';
+      return res.status(400).json({ status: 'error', message });
+    }
+
+    res.status(400).json({
+      status: 'error',
+      message: 'Erreur lors de la création de l\'utilisateur: ' + error.message
+    });
+  }
+};
+
+// Get all schools with filtering and pagination
+exports.getAllSchools = async (req, res) => {
+  try {
+    const { page = 1, limit = 10, search, city } = req.query;
+    const skip = (page - 1) * limit;
+
+    const filter = {};
+    if (search) {
+      filter.name = { $regex: search, $options: 'i' };
+    }
+    if (city) {
+      filter.city = { $regex: city, $options: 'i' };
+    }
+
+    const [schools, total] = await Promise.all([
+      School.find(filter)
+        .populate('director', 'firstName lastName email phone')
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(parseInt(limit)),
+      School.countDocuments(filter)
+    ]);
+
+    res.status(200).json({
+      status: 'success',
+      results: schools.length,
+      total,
+      page: parseInt(page),
+      pages: Math.ceil(total / limit),
+      data: { schools }
+    });
+  } catch (error) {
+    console.error('Get all schools error:', error);
+    res.status(400).json({
+      status: 'error',
+      message: 'Erreur lors de la récupération des écoles: ' + error.message
+    });
+  }
+};
+
+// Get all users with filtering and pagination
+exports.getAllUsers = async (req, res) => {
+  try {
+    const { page = 1, limit = 10, role, registrationStatus, schoolId, search } = req.query;
+    const skip = (page - 1) * limit;
+
+    const filter = {};
+    if (role) filter.role = role;
+    if (registrationStatus) filter.registrationStatus = registrationStatus;
+    if (schoolId) filter.school = schoolId;
+    if (search) {
+      filter.$or = [
+        { firstName: { $regex: search, $options: 'i' } },
+        { lastName: { $regex: search, $options: 'i' } },
+        { email: { $regex: search, $options: 'i' } }
+      ];
+    }
+
+    const [users, total] = await Promise.all([
+      User.find(filter)
+        .populate('school', 'name city')
+        .populate('createdBy', 'firstName lastName')
+        .select('-password')
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(parseInt(limit)),
+      User.countDocuments(filter)
+    ]);
+
+    res.status(200).json({
+      status: 'success',
+      results: users.length,
+      total,
+      page: parseInt(page),
+      pages: Math.ceil(total / limit),
+      data: { users }
+    });
+  } catch (error) {
+    console.error('Get all users error:', error);
+    res.status(400).json({
+      status: 'error',
+      message: 'Erreur lors de la récupération des utilisateurs: ' + error.message
+    });
+  }
+};
+
+// Manage user status (activate/deactivate, approve/reject)
+exports.manageUser = async (req, res) => {
+  try {
+    const { userId } = req.params;
+    const { isActive, registrationStatus } = req.body;
+
+    const user = await User.findById(userId);
+    if (!user) {
+      return res.status(404).json({
+        status: 'error',
+        message: 'Utilisateur non trouvé'
+      });
+    }
+
+    // Prevent modifying other admins (only super admin can modify themselves)
+    if (user.role === 'admin' && req.user.role !== 'admin') {
+      return res.status(403).json({
+        status: 'error',
+        message: 'Non autorisé à modifier un administrateur'
+      });
+    }
+
+    const updateData = {};
+    if (isActive !== undefined) updateData.isActive = isActive;
+    if (registrationStatus) updateData.registrationStatus = registrationStatus;
+
+    const updatedUser = await User.findByIdAndUpdate(
+      userId,
+      updateData,
+      { new: true, runValidators: true }
+    ).populate('school');
+
+    // Update role-specific records if approved
+    if (registrationStatus === 'approved' && user.role === 'teacher') {
+      await Teacher.findOneAndUpdate(
+        { user: userId },
+        { registrationStatus: 'approved', isActive: true }
+      );
+    }
+
+    res.status(200).json({
+      status: 'success',
+      message: 'Utilisateur mis à jour avec succès',
+      data: { user: updatedUser }
+    });
+  } catch (error) {
+    console.error('Manage user error:', error);
+    res.status(400).json({
+      status: 'error',
+      message: 'Erreur lors de la gestion de l\'utilisateur: ' + error.message
+    });
+  }
+};
+
+// Platform statistics
+exports.getPlatformStats = async (req, res) => {
+  try {
+    const [
+      totalSchools,
+      totalUsers,
+      pendingRegistrations,
+      totalTeachers,
+      totalStudents,
+      totalParents,
+      totalDirectors,
+      activeUsers
+    ] = await Promise.all([
+      School.countDocuments(),
+      User.countDocuments(),
+      User.countDocuments({ registrationStatus: 'pending' }),
+      User.countDocuments({ role: 'teacher' }),
+      User.countDocuments({ role: 'student' }),
+      User.countDocuments({ role: 'parent' }),
+      User.countDocuments({ role: 'director' }),
+      User.countDocuments({ isActive: true, registrationStatus: 'approved' })
+    ]);
+
+    // Recent activity (last 7 days)
+    const oneWeekAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+    const recentUsers = await User.countDocuments({
+      createdAt: { $gte: oneWeekAgo }
+    });
+
+    res.status(200).json({
+      status: 'success',
+      data: {
+        stats: {
+          totalSchools,
+          totalUsers,
+          pendingRegistrations,
+          totalTeachers,
+          totalStudents,
+          totalParents,
+          totalDirectors,
+          activeUsers,
+          recentUsers
+        }
+      }
+    });
+  } catch (error) {
+    console.error('Get platform stats error:', error);
+    res.status(400).json({
+      status: 'error',
+      message: 'Erreur lors de la récupération des statistiques: ' + error.message
+    });
+  }
+};
+
+// Create school (admin can create schools directly)
+exports.createSchool = async (req, res) => {
+  try {
+    const { name, address, city, phone, email, country, directorId } = req.body;
+
+    if (!name || !address || !city) {
+      return res.status(400).json({
+        status: 'error',
+        message: 'Le nom, l\'adresse et la ville sont obligatoires'
+      });
+    }
+
+    const existingSchool = await School.findOne({ name });
+    if (existingSchool) {
+      return res.status(400).json({
+        status: 'error',
+        message: 'Une école avec ce nom existe déjà'
+      });
+    }
+
+    let director;
+    if (directorId) {
+      director = await User.findOne({ _id: directorId, role: 'director' });
+      if (!director) {
+        return res.status(400).json({
+          status: 'error',
+          message: 'Directeur non trouvé ou rôle incorrect'
+        });
+      }
+    }
+
+    const schoolData = {
+      name,
+      address,
+      city,
+      phone: phone || '',
+      email: email || '',
+      country: country || 'Togo',
+      createdBy: req.user._id
+    };
+
+    if (director) {
+      schoolData.director = director._id;
+      // Update director's school
+      await User.findByIdAndUpdate(director._id, { school: schoolData._id });
+    }
+
+    const school = await School.create(schoolData);
+
+    res.status(201).json({
+      status: 'success',
+      message: 'École créée avec succès',
+      data: { school }
+    });
+  } catch (error) {
+    console.error('Create school error:', error);
+    res.status(400).json({
+      status: 'error',
+      message: 'Erreur lors de la création de l\'école: ' + error.message
+    });
+  }
+};
+
+// Update school
+exports.updateSchool = async (req, res) => {
+  try {
+    const { schoolId } = req.params;
+    const { name, address, city, phone, email, country, directorId } = req.body;
+
+    const school = await School.findById(schoolId);
+    if (!school) {
+      return res.status(404).json({
+        status: 'error',
+        message: 'École non trouvée'
+      });
+    }
+
+    if (name && name !== school.name) {
+      const existingSchool = await School.findOne({ name });
+      if (existingSchool) {
+        return res.status(400).json({
+          status: 'error',
+          message: 'Une école avec ce nom existe déjà'
+        });
+      }
+    }
+
+    const updateData = {};
+    if (name) updateData.name = name;
+    if (address) updateData.address = address;
+    if (city) updateData.city = city;
+    if (phone !== undefined) updateData.phone = phone;
+    if (email !== undefined) updateData.email = email;
+    if (country) updateData.country = country;
+
+    if (directorId) {
+      const director = await User.findOne({ _id: directorId, role: 'director' });
+      if (!director) {
+        return res.status(400).json({
+          status: 'error',
+          message: 'Directeur non trouvé ou rôle incorrect'
+        });
+      }
+      updateData.director = directorId;
+      
+      // Update director's school assignment
+      await User.findByIdAndUpdate(directorId, { school: schoolId });
+    }
+
+    const updatedSchool = await School.findByIdAndUpdate(
+      schoolId,
+      updateData,
+      { new: true, runValidators: true }
+    ).populate('director', 'firstName lastName email');
+
+    res.status(200).json({
+      status: 'success',
+      message: 'École mise à jour avec succès',
+      data: { school: updatedSchool }
+    });
+  } catch (error) {
+    console.error('Update school error:', error);
+    res.status(400).json({
+      status: 'error',
+      message: 'Erreur lors de la mise à jour de l\'école: ' + error.message
+    });
+  }
+};
+
+// ==================== EXISTING AUTH FUNCTIONS ====================
+
 exports.register = async (req, res) => {
   try {
     const {
@@ -68,6 +564,14 @@ exports.register = async (req, res) => {
       return res.status(400).json({
         status: 'error',
         message: 'Tous les champs obligatoires doivent être remplis'
+      });
+    }
+
+    // Prevent admin registration through normal registration
+    if (role === 'admin') {
+      return res.status(403).json({
+        status: 'error',
+        message: 'Inscription en tant qu\'administrateur non autorisée'
       });
     }
 
@@ -150,9 +654,6 @@ exports.register = async (req, res) => {
     // Handle director post-creation
     if (role === 'director' && school) {
       await School.findByIdAndUpdate(school._id, { director: newUser._id });
-      newUser.registrationStatus = 'approved';
-      newUser.isActive = true;
-      await newUser.save();
     }
 
     // Handle parent registration
@@ -165,9 +666,6 @@ exports.register = async (req, res) => {
       if (school) parentPayload.school = school._id;
       
       await Parent.create(parentPayload);
-      newUser.registrationStatus = 'approved';
-      newUser.isActive = true;
-      await newUser.save();
     }
 
     // Handle teacher registration
@@ -181,14 +679,11 @@ exports.register = async (req, res) => {
         registrationStatus: school ? 'approved' : 'pending'
       });
 
-      if (school) {
-        newUser.registrationStatus = 'approved';
-        newUser.isActive = true;
-      } else {
+      if (!school) {
         newUser.registrationStatus = 'pending';
         newUser.isActive = false;
+        await newUser.save();
       }
-      await newUser.save();
     }
 
     // Handle student registration
@@ -203,15 +698,14 @@ exports.register = async (req, res) => {
         registrationStatus: school ? 'approved' : 'pending'
       });
 
-      if (school) {
-        newUser.registrationStatus = 'approved';
-        newUser.isActive = true;
-      } else {
+      if (!school) {
         newUser.registrationStatus = 'pending';
         newUser.isActive = false;
+        await newUser.save();
       }
-      await newUser.save();
     }
+
+    await newUser.populate('school');
 
     // Send response
     if (newUser.registrationStatus === 'approved') {
@@ -221,14 +715,7 @@ exports.register = async (req, res) => {
         status: 'success',
         message: 'Inscription réussie! Votre compte est en attente d\'approbation par un administrateur.',
         data: {
-          user: {
-            id: newUser._id,
-            email: newUser.email,
-            firstName: newUser.firstName,
-            lastName: newUser.lastName,
-            role: newUser.role,
-            registrationStatus: newUser.registrationStatus
-          },
+          user: newUser,
           requiresApproval: true
         }
       });
@@ -339,6 +826,13 @@ exports.protect = async (req, res, next) => {
       });
     }
 
+    if (currentUser.changedPasswordAfter(decoded.iat)) {
+      return res.status(401).json({
+        status: 'error',
+        message: 'L\'utilisateur a récemment changé son mot de passe! Veuillez vous reconnecter.'
+      });
+    }
+
     if (currentUser.registrationStatus !== 'approved') {
       return res.status(401).json({
         status: 'error',
@@ -387,12 +881,43 @@ exports.restrictTo = (...roles) => {
   };
 };
 
+// Admin-specific middleware
+exports.isAdmin = (req, res, next) => {
+  if (req.user.role !== 'admin') {
+    return res.status(403).json({
+      status: 'error',
+      message: 'Accès réservé aux administrateurs'
+    });
+  }
+  next();
+};
+
+// School-level admin middleware (director or admin)
+exports.isSchoolAdmin = (req, res, next) => {
+  if (!['admin', 'director'].includes(req.user.role)) {
+    return res.status(403).json({
+      status: 'error',
+      message: 'Accès réservé aux administrateurs d\'école'
+    });
+  }
+  next();
+};
+
+// ==================== REGISTRATION MANAGEMENT ====================
+
 exports.getPendingRegistrations = async (req, res) => {
   try {
-    const pendingUsers = await User.find({
+    let filter = {
       registrationStatus: 'pending',
       role: { $in: ['teacher', 'student'] }
-    })
+    };
+
+    // If user is director, only show registrations for their school
+    if (req.user.role === 'director' && req.user.school) {
+      filter.school = req.user.school;
+    }
+
+    const pendingUsers = await User.find(filter)
       .populate('school')
       .select('-password')
       .sort({ createdAt: -1 });
@@ -432,7 +957,10 @@ exports.approveRegistration = async (req, res) => {
     const { userId } = req.params;
     const { schoolId, classId, additionalData } = req.body;
 
-    if (!schoolId) {
+    // For directors, they can only assign to their own school
+    const finalSchoolId = req.user.role === 'director' ? req.user.school : schoolId;
+
+    if (!finalSchoolId) {
       return res.status(400).json({
         status: 'error',
         message: 'L\'ID de l\'école est obligatoire'
@@ -447,7 +975,7 @@ exports.approveRegistration = async (req, res) => {
       });
     }
 
-    const school = await School.findById(schoolId);
+    const school = await School.findById(finalSchoolId);
     if (!school) {
       return res.status(404).json({
         status: 'error',
@@ -455,29 +983,33 @@ exports.approveRegistration = async (req, res) => {
       });
     }
 
+    // Check if director has permission for this school
+    if (req.user.role === 'director' && !req.user.school.equals(finalSchoolId)) {
+      return res.status(403).json({
+        status: 'error',
+        message: 'Vous n\'avez pas la permission d\'approuver pour cette école'
+      });
+    }
+
     if (user.role === 'teacher') {
       const teacher = await Teacher.findOne({ user: userId });
       if (teacher) {
-        teacher.school = schoolId;
+        teacher.school = finalSchoolId;
         teacher.registrationStatus = 'approved';
         teacher.isActive = true;
         await teacher.save();
-      } else {
-        return res.status(404).json({
-          status: 'error',
-          message: 'Enregistrement enseignant non trouvé'
-        });
       }
     } else if (user.role === 'student') {
       const studentReg = await StudentRegistration.findOne({ user: userId });
       if (studentReg) {
         await Student.create({
+          user: user._id,
           studentId: studentReg.studentId,
           firstName: user.firstName,
           lastName: user.lastName,
           dateOfBirth: additionalData?.dateOfBirth || new Date('2000-01-01'),
           gender: additionalData?.gender || 'male',
-          school: schoolId,
+          school: finalSchoolId,
           class: classId || null,
           level: additionalData?.level || 'college',
           series: additionalData?.series || null,
@@ -486,17 +1018,12 @@ exports.approveRegistration = async (req, res) => {
         });
 
         await StudentRegistration.deleteOne({ user: userId });
-      } else {
-        return res.status(404).json({
-          status: 'error',
-          message: 'Enregistrement d\'inscription étudiant non trouvé'
-        });
       }
     }
 
     user.registrationStatus = 'approved';
     user.isActive = true;
-    user.school = schoolId;
+    user.school = finalSchoolId;
     await user.save();
     await user.populate('school');
 
@@ -533,6 +1060,14 @@ exports.rejectRegistration = async (req, res) => {
       });
     }
 
+    // Check if director has permission for this user's school
+    if (req.user.role === 'director' && user.school && !req.user.school.equals(user.school)) {
+      return res.status(403).json({
+        status: 'error',
+        message: 'Vous n\'avez pas la permission de rejeter cet utilisateur'
+      });
+    }
+
     user.registrationStatus = 'rejected';
     await user.save();
 
@@ -561,6 +1096,8 @@ exports.rejectRegistration = async (req, res) => {
     });
   }
 };
+
+// ==================== USER PROFILE MANAGEMENT ====================
 
 exports.getMe = (req, res) => {
   res.status(200).json({
@@ -609,7 +1146,6 @@ exports.changePassword = async (req, res) => {
     }
 
     user.password = newPassword;
-    user.passwordChangedAt = Date.now();
     await user.save();
 
     createSendToken(user, 200, res);
@@ -627,7 +1163,7 @@ exports.updateProfile = async (req, res) => {
     const { firstName, lastName, phone } = req.body;
 
     // Don't allow password updates through this route
-    if (req.body.password || req.body.passwordConfirm) {
+    if (req.body.password) {
       return res.status(400).json({
         status: 'error',
         message: 'Utilisez la route /change-password pour modifier votre mot de passe'
