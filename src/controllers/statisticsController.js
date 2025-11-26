@@ -1,5 +1,5 @@
 const Student = require('../models/Student');
-const Grade = require('../models/grade');
+const Grade = require('../models/Grade');
 const Class = require('../models/Classroom');
 const Subject = require('../models/Subject');
 const Teacher = require('../models/Teacher');

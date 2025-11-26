@@ -1,6 +1,6 @@
 const Bulletin = require('../models/Bulletin');
 const Student = require('../models/Student');
-const Grade = require('../models/grade');
+const Grade = require('../models/Grade');
 const Class = require('../models/Classroom');
 const Payment = require('../models/Payment');
 const { generateMaternelleBulletin, generatePrimaireBulletin, generateCollegeBulletin, generateLyceeBulletin } = require('../services/pdfGenerator/pdfGenerator');

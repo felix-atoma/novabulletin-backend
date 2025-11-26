@@ -1,65 +1,41 @@
+// routes/subjectRoutes.js
 const express = require('express');
-const subjectController = require('../controllers/subjectController');
-const authController = require('../controllers/authController');
-const roleCheck = require('../middleware/roleCheck');
-
 const router = express.Router();
+const subjectController = require('../controllers/subjectController');
+const { protect, restrictTo } = require('../middleware/authMiddleware');
 
-/**
- * Helper to ensure controller functions exist
- */
-function ensure(fn, name) {
-  if (!fn || typeof fn !== "function") {
-    return (req, res) => {
-      res.status(500).json({
-        status: "error",
-        message: `Controller function "${name}" is missing or undefined`
-      });
-    };
-  }
-  return fn;
-}
+// Apply authentication to all routes
+router.use(protect);
 
-router.use(authController.protect);
+// Public routes (all authenticated users can view subjects)
+router.get('/', subjectController.getAllSubjects);
+router.get('/coefficients', subjectController.getCoefficientReference);
+router.get('/class/:classId', subjectController.getSubjectsByClass);
+router.get('/:id', subjectController.getSubject);
 
-/**
- * SUBJECT CRUD
- */
-router.route('/')
-  .get(ensure(subjectController.getAllSubjects, "getAllSubjects"))
-  .post(
-    roleCheck.requireRole('admin', 'director'),
-    ensure(subjectController.createSubject, "createSubject")
-  );
-
-router.route('/:id')
-  .get(ensure(subjectController.getSubject, "getSubject"))
-  .patch(
-    roleCheck.requireRole('admin', 'director'),
-    ensure(subjectController.updateSubject, "updateSubject")
-  )
-  .delete(
-    roleCheck.requireRole('admin', 'director'),
-    ensure(subjectController.deleteSubject, "deleteSubject")
-  );
-
-/**
- * BY LEVEL / SERIES
- */
-router.get('/level/:level',
-  ensure(subjectController.getSubjectsByLevel, "getSubjectsByLevel")
+// Protected routes (admin, director, teacher only)
+router.post(
+  '/',
+  restrictTo('admin', 'director', 'teacher'),
+  subjectController.createSubject
 );
 
-router.get('/series/:series',
-  ensure(subjectController.getSubjectsBySeries, "getSubjectsBySeries")
+router.post(
+  '/bulk',
+  restrictTo('admin', 'director'),
+  subjectController.bulkCreateSubjects
 );
 
-/**
- * ASSIGN SUBJECTS TO TEACHERS
- */
-router.patch('/:id/teachers',
-  roleCheck.requireRole('admin', 'director'),
-  ensure(subjectController.assignTeachers, "assignTeachers")
+router.put(
+  '/:id',
+  restrictTo('admin', 'director', 'teacher'),
+  subjectController.updateSubject
+);
+
+router.delete(
+  '/:id',
+  restrictTo('admin', 'director'),
+  subjectController.deleteSubject
 );
 
 module.exports = router;

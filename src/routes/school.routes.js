@@ -10,52 +10,55 @@ console.log('🏫 School routes loading...');
 // Protect all routes
 router.use(authController.protect);
 
-// Create school (admin only) - ADD THIS ROUTE
-router.post(
-  '/',
-  authController.restrictTo('admin'),
-  schoolController.createSchool
-);
+// ⚠️ IMPORTANT: Specific routes MUST come BEFORE parameterized routes (/:id)
+// Otherwise Express will match "me" and "stats" as IDs
 
-// Get all schools (admin only) - ADD THIS ROUTE
+// Get current user's school - MOVE BEFORE /:id
 router.get(
-  '/',
-  authController.restrictTo('admin'),
-  schoolController.getAllSchools
+  '/me',
+  requireSchoolAccess,
+  schoolController.getSchool
 );
 
-// Get specific school by ID - ADD THIS ROUTE
-router.get(
-  '/:id',
-  schoolController.getSchoolById
-);
-
-// Update school - ADD THIS ROUTE
-router.patch(
-  '/:id',
-  authController.restrictTo('admin', 'director'),
-  schoolController.updateSchool
-);
-
-// Delete school (admin only) - ADD THIS ROUTE
-router.delete(
-  '/:id',
-  authController.restrictTo('admin'),
-  schoolController.deleteSchool
-);
-
-// School statistics - KEEP existing
+// School statistics - MOVE BEFORE /:id
 router.get(
   '/stats',
   requireSchoolAccess,
   schoolController.getSchoolStats
 );
 
-// Get current user's school - KEEP existing but fix path
+// Get all schools (admin only)
 router.get(
-  '/me',
-  requireSchoolAccess,
-  schoolController.getSchool
+  '/',
+  authController.restrictTo('admin'),
+  schoolController.getAllSchools
+);
+
+// Create school (admin only)
+router.post(
+  '/',
+  authController.restrictTo('admin'),
+  schoolController.createSchool
+);
+
+// Get specific school by ID - MUST BE AFTER /me and /stats
+router.get(
+  '/:id',
+  schoolController.getSchoolById
+);
+
+// Update school
+router.patch(
+  '/:id',
+  authController.restrictTo('admin', 'director'),
+  schoolController.updateSchool
+);
+
+// Delete school (admin only)
+router.delete(
+  '/:id',
+  authController.restrictTo('admin'),
+  schoolController.deleteSchool
 );
 
 console.log('✅ School routes registered:', router.stack.map(layer => {

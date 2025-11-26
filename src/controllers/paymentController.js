@@ -4,6 +4,50 @@ const Student = require('../models/Student');
 const { initiateMobileMoneyPayment, verifyMobileMoneyPayment } = require('../services/mobileMoneyService');
 const PDFDocument = require('pdfkit');
 
+exports.getAllPayments = async (req, res) => {
+  try {
+    const { page = 1, limit = 10, status, studentId, schoolId } = req.query;
+
+    const query = {};
+    
+    // Filter by school if user is director
+    if (req.user.role === 'director' && req.user.school) {
+      query.school = req.user.school;
+    }
+    
+    // Additional filters
+    if (status) query.status = status;
+    if (studentId) query.student = studentId;
+    if (schoolId && req.user.role === 'admin') query.school = schoolId;
+
+    const payments = await Payment.find(query)
+      .populate('parent', 'firstName lastName email phone')
+      .populate('student', 'firstName lastName studentId')
+      .populate('school', 'name')
+      .sort({ createdAt: -1 })
+      .limit(limit * 1)
+      .skip((page - 1) * limit);
+
+    const total = await Payment.countDocuments(query);
+
+    res.status(200).json({
+      status: 'success',
+      results: payments.length,
+      data: {
+        payments,
+        totalPages: Math.ceil(total / limit),
+        currentPage: page
+      }
+    });
+  } catch (error) {
+    console.error('Get all payments error:', error);
+    res.status(400).json({
+      status: 'error',
+      message: 'Erreur lors de la récupération des paiements: ' + error.message
+    });
+  }
+};
+
 exports.initiatePayment = async (req, res) => {
   try {
     const { studentId, amount, paymentMethod, phoneNumber, mobileMoneyProvider, trimester } = req.body;

@@ -8,6 +8,14 @@ const router = express.Router();
 
 router.use(authController.protect);
 
+// ⚠️ IMPORTANT: Specific routes MUST come BEFORE parameterized routes (/:id)
+
+// GET all payments - ADD THIS MISSING ROUTE
+router.get('/',
+  authController.restrictTo('admin', 'director'),
+  paymentController.getAllPayments
+);
+
 // Routes parents
 router.post('/initiate',
   validation.validatePayment,
@@ -47,7 +55,7 @@ router.post('/webhook/mobile-money',
   paymentController.handleMobileMoneyWebhook
 );
 
-// Génération de reçus
+// Génération de reçus - MUST BE AFTER SPECIFIC ROUTES
 router.get('/:id/receipt',
   paymentController.generateReceipt
 );

@@ -1,89 +1,82 @@
+// routes/gradeRoutes.js
 const express = require('express');
-const gradeController = require('../controllers/gradeController');
-const authController = require('../controllers/authController');
-
 const router = express.Router();
+const gradeController = require('../controllers/gradeController');
+const { protect, restrictTo } = require('../middleware/authMiddleware');
 
-console.log('📊 Grade routes loading...');
+// Apply authentication to all routes
+router.use(protect);
 
-// Protect all routes
-router.use(authController.protect);
-
-/* ===========================
-   GRADE MANAGEMENT ROUTES
-=========================== */
-
-// Create a single grade - FIXED: Use correct method name
-router.post(
-  '/',
-  gradeController.enterGrade
-);
-
-// Bulk grade entry - FIXED: Use correct method name
-router.post(
-  '/bulk',
-  gradeController.bulkEnterGrades
-);
-
-// Get student grades for a trimester
-router.get(
-  '/student/:studentId/trimester/:trimester',
-  gradeController.getStudentGrades
-);
-
-// Get class grades for a subject and trimester
-router.get(
-  '/class/:classId/subject/:subjectId/trimester/:trimester',
-  gradeController.getClassGrades
-);
-
-// Get all grades (with filters)
+// Get all grades (admin, director, teacher)
 router.get(
   '/',
+  restrictTo('admin', 'director', 'teacher'),
   gradeController.getAllGrades
 );
 
-// Get specific grade
+// Get grades for a specific student and trimester
 router.get(
-  '/:id',
-  gradeController.getGrade
+  '/student/:studentId/:trimester',
+  gradeController.getStudentGrades
 );
 
-// Update grade
-router.patch(
-  '/:id',
-  gradeController.updateGrade
+// Get grades for a class, subject, and trimester
+router.get(
+  '/class/:classId/subject/:subjectId/:trimester',
+  restrictTo('admin', 'director', 'teacher'),
+  gradeController.getClassGrades
 );
 
-// Delete grade
-router.delete(
-  '/:id',
-  gradeController.deleteGrade
-);
-
-// Publish grade
-router.patch(
-  '/:id/publish',
-  gradeController.publishGrade
-);
-
-// Import grades
-router.post(
-  '/import/:classId/:subjectId/:trimester',
-  gradeController.importGrades
-);
-
-// Export grades
+// Export grades for a class
 router.get(
   '/export/:classId/:subjectId/:trimester',
+  restrictTo('admin', 'director', 'teacher'),
   gradeController.exportGrades
 );
 
-console.log('✅ Grade routes registered:', router.stack.map(layer => {
-  if (layer.route) {
-    return `${Object.keys(layer.route.methods).join(', ').toUpperCase()} ${layer.route.path}`;
-  }
-  return null;
-}).filter(Boolean));
+// Get single grade
+router.get('/:id', gradeController.getGrade);
+
+// Enter a single grade
+router.post(
+  '/',
+  restrictTo('admin', 'director', 'teacher'),
+  gradeController.enterGrade
+);
+
+// Bulk enter grades for a class
+router.post(
+  '/bulk',
+  restrictTo('admin', 'director', 'teacher'),
+  gradeController.bulkEnterGrades
+);
+
+// Import grades from CSV/Excel
+router.post(
+  '/import/:classId/:subjectId/:trimester',
+  restrictTo('admin', 'director', 'teacher'),
+  gradeController.importGrades
+);
+
+// Update a grade
+router.put(
+  '/:id',
+  restrictTo('admin', 'director', 'teacher'),
+  gradeController.updateGrade
+);
+
+// Publish a grade
+router.patch(
+  '/:id/publish',
+  restrictTo('admin', 'director', 'teacher'),
+  gradeController.publishGrade
+);
+
+// Delete a grade
+router.delete(
+  '/:id',
+  restrictTo('admin', 'director', 'teacher'),
+  gradeController.deleteGrade
+);
 
 module.exports = router;

@@ -1,6 +1,8 @@
 // tests/setup.js
 const mongoose = require('mongoose');
 const dotenv = require('dotenv');
+require('jest-extended');
+
 
 // Load test environment variables
 dotenv.config({ path: '.env.test' });

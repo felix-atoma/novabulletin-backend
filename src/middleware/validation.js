@@ -24,10 +24,19 @@ exports.validateRegister = (req, res, next) => {
       'any.required': 'Le rôle est obligatoire'
     }),
     phone: Joi.string().optional().allow(''),
+    
+    // Director-specific fields
     schoolName: Joi.when('role', {
       is: 'director',
       then: Joi.string().required().messages({
         'any.required': 'Le nom de l\'école est obligatoire pour les directeurs'
+      }),
+      otherwise: Joi.optional().allow('')
+    }),
+    city: Joi.when('role', {
+      is: 'director',
+      then: Joi.string().required().messages({
+        'any.required': 'La ville est obligatoire pour les directeurs'
       }),
       otherwise: Joi.optional().allow('')
     }),
@@ -38,14 +47,21 @@ exports.validateRegister = (req, res, next) => {
       }),
       otherwise: Joi.optional().allow('')
     }),
+    
+    // Teacher/Student/Parent - optional schoolId for linking to existing school
+    schoolId: Joi.string().optional().allow(''),
+    
+    // Student-specific fields
     studentId: Joi.when('role', {
       is: 'student',
-      then: Joi.string().optional().allow(''), // Changed to optional for registration
+      then: Joi.string().optional().allow(''),
       otherwise: Joi.optional().allow('')
     }),
+    
+    // Teacher-specific fields
     teacherId: Joi.when('role', {
       is: 'teacher',
-      then: Joi.string().optional().allow(''), // Changed to optional for registration
+      then: Joi.string().optional().allow(''),
       otherwise: Joi.optional().allow('')
     })
   });

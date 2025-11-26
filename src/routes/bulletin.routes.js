@@ -1,47 +1,78 @@
+// routes/bulletinRoutes.js
 const express = require('express');
-const bulletinController = require('../controllers/bulletinController');
-const authController = require('../controllers/authController');
-
 const router = express.Router();
+const bulletinController = require('../controllers/bulletinController');
+const { protect, restrictTo } = require('../middleware/authMiddleware');
 
-// Protect all routes
-router.use(authController.protect);
+// Apply authentication to all routes
+router.use(protect);
 
-// Generate single bulletin
-router.post('/generate', bulletinController.generateBulletin);
+// Get all bulletins (admin, director, teacher)
+router.get(
+  '/',
+  restrictTo('admin', 'director', 'teacher'),
+  bulletinController.getAllBulletins
+);
 
-// Generate bulk bulletins
-router.post('/generate/bulk', bulletinController.generateBulkBulletins);
+// Get bulletins for a specific class
+router.get(
+  '/class/:classId/:trimester?',
+  restrictTo('admin', 'director', 'teacher'),
+  bulletinController.getClassBulletins
+);
 
-// Get all bulletins
-router.get('/', bulletinController.getAllBulletins);
+// Get bulletins for a specific student
+router.get(
+  '/student/:studentId',
+  bulletinController.getStudentBulletins
+);
 
-// Get student bulletins
-router.get('/student/:studentId', bulletinController.getStudentBulletins);
-
-// Get class bulletins (with or without trimester)
-router.get('/class/:classId', bulletinController.getClassBulletins);
-router.get('/class/:classId/trimester/:trimester', bulletinController.getClassBulletins);
-
-// Get specific bulletin
+// Get single bulletin
 router.get('/:id', bulletinController.getBulletin);
 
-// Update bulletin
-router.patch('/:id', bulletinController.updateBulletin);
+// Download bulletin as PDF
+router.get('/:id/download', bulletinController.downloadBulletinPDF);
 
-// Delete bulletin
-router.delete('/:id', bulletinController.deleteBulletin);
+// Generate a single bulletin
+router.post(
+  '/generate',
+  restrictTo('admin', 'director', 'teacher'),
+  bulletinController.generateBulletin
+);
 
-// Approve bulletin
-router.patch('/:id/approve', bulletinController.publishBulletin);
+// Generate bulletins for entire class
+router.post(
+  '/generate/bulk',
+  restrictTo('admin', 'director', 'teacher'),
+  bulletinController.generateBulkBulletins
+);
+
+// Update bulletin (appreciation)
+router.put(
+  '/:id',
+  restrictTo('admin', 'director', 'teacher'),
+  bulletinController.updateBulletin
+);
 
 // Publish bulletin
-router.patch('/:id/publish', bulletinController.publishBulletin);
+router.patch(
+  '/:id/publish',
+  restrictTo('admin', 'director', 'teacher'),
+  bulletinController.publishBulletin
+);
 
 // Unpublish bulletin
-router.patch('/:id/unpublish', bulletinController.unpublishBulletin);
+router.patch(
+  '/:id/unpublish',
+  restrictTo('admin', 'director', 'teacher'),
+  bulletinController.unpublishBulletin
+);
 
-// Download bulletin PDF
-router.post('/:id/download', bulletinController.downloadBulletinPDF);
+// Delete bulletin
+router.delete(
+  '/:id',
+  restrictTo('admin', 'director'),
+  bulletinController.deleteBulletin
+);
 
 module.exports = router;

@@ -2,69 +2,7 @@ const Bulletin = require('../models/Bulletin');
 const Student = require('../models/Student');
 const Grade = require('../models/Grade');
 
-// PDF Download - Simplified version that works without PDF dependencies
-exports.downloadBulletinPDF = async (req, res) => {
-  try {
-    const bulletin = await Bulletin.findById(req.params.id)
-      .populate('student', 'firstName lastName studentId level')
-      .populate('class', 'name grade')
-      .populate('school', 'name');
-
-    if (!bulletin) {
-      return res.status(404).json({
-        status: 'error',
-        message: 'Bulletin non trouvé'
-      });
-    }
-
-    // Create simple PDF content (text-based for now)
-    const pdfContent = `
-      BULLETIN SCOLAIRE
-      =================
-      
-      Élève: ${bulletin.student.firstName} ${bulletin.student.lastName}
-      Classe: ${bulletin.class?.name || 'Non spécifiée'}
-      Trimestre: ${bulletin.trimester}
-      Année scolaire: ${bulletin.academicYear}
-      
-      Notes:
-      ${bulletin.grades.map(grade => 
-        `- ${grade.subject?.name || 'Matière'}: ${grade.note}/20`
-      ).join('\n')}
-      
-      Appréciation générale: ${bulletin.generalAppreciation}
-      
-      Moyenne générale: ${bulletin.statistics?.average || 'Non calculée'}
-    `;
-
-    res.set({
-      'Content-Type': 'application/pdf',
-      'Content-Disposition': `attachment; filename=bulletin-${bulletin.student.studentId}-${bulletin.trimester}.pdf`,
-    });
-
-    // For now, return JSON with success message since PDF generation might not be implemented
-    res.status(200).json({
-      status: 'success',
-      message: 'PDF download endpoint reached - PDF generation would happen here',
-      data: {
-        bulletin: {
-          _id: bulletin._id,
-          student: bulletin.student,
-          trimester: bulletin.trimester,
-          academicYear: bulletin.academicYear
-        }
-      }
-    });
-  } catch (error) {
-    console.error('PDF download error:', error);
-    res.status(400).json({
-      status: 'error',
-      message: 'Erreur lors de la génération du PDF: ' + error.message
-    });
-  }
-};
-
-// Generate bulletin
+// Generate bulletin with new grading system
 exports.generateBulletin = async (req, res) => {
   try {
     const { studentId, trimester, academicYear = '2024-2025' } = req.body;
@@ -72,7 +10,7 @@ exports.generateBulletin = async (req, res) => {
     console.log('Generating bulletin for student:', studentId, 'trimester:', trimester);
 
     const student = await Student.findById(studentId)
-      .populate('class', 'name grade')
+      .populate('class', 'name grade level series')
       .populate('school', 'name');
 
     if (!student) {
@@ -90,16 +28,27 @@ exports.generateBulletin = async (req, res) => {
 
     console.log(`Found ${grades.length} grades for student ${studentId}`);
 
-    // Calculate basic statistics
+    if (grades.length === 0) {
+      return res.status(400).json({
+        status: 'error',
+        message: 'Aucune note trouvée pour cet élève et ce trimestre'
+      });
+    }
+
+    // Calculate statistics with new grading system
     let totalNotes = 0;
     let totalCoefficients = 0;
+    let completedSubjects = 0;
     
     const gradeDetails = grades.map(grade => {
-      const note = grade.note || 0;
+      const moyenne = grade.note || 0;
       const coefficient = grade.coefficient || grade.subject?.coefficient || 1;
       
-      totalNotes += note * coefficient;
-      totalCoefficients += coefficient;
+      if (grade.note !== null && grade.note !== undefined) {
+        totalNotes += moyenne * coefficient;
+        totalCoefficients += coefficient;
+        completedSubjects++;
+      }
 
       return {
         subject: grade.subject ? {
@@ -108,19 +57,34 @@ exports.generateBulletin = async (req, res) => {
           code: grade.subject.code,
           coefficient: grade.subject.coefficient
         } : { name: 'Matière inconnue', coefficient: 1 },
-        note: note,
+        interrogation1: grade.interrogation1,
+        interrogation2: grade.interrogation2,
+        interrogation3: grade.interrogation3,
+        composition: grade.composition,
+        moyenne: moyenne,
         coefficient: coefficient,
         appreciation: grade.appreciation || 'Non spécifié'
       };
     });
 
-    const average = totalCoefficients > 0 ? (totalNotes / totalCoefficients).toFixed(2) : 0;
+    const generalAverage = totalCoefficients > 0 
+      ? parseFloat((totalNotes / totalCoefficients).toFixed(2)) 
+      : 0;
+
+    // Determine mention based on average
+    let mention = '';
+    if (generalAverage >= 16) mention = 'Très Bien';
+    else if (generalAverage >= 14) mention = 'Bien';
+    else if (generalAverage >= 12) mention = 'Assez Bien';
+    else if (generalAverage >= 10) mention = 'Passable';
+    else mention = 'Échec';
 
     const statistics = {
-      average: parseFloat(average),
+      average: generalAverage,
       totalSubjects: grades.length,
-      totalNotes: totalNotes,
-      totalCoefficients: totalCoefficients
+      completedSubjects: completedSubjects,
+      totalCoefficients: totalCoefficients,
+      mention: mention
     };
 
     // Create bulletin
@@ -131,21 +95,37 @@ exports.generateBulletin = async (req, res) => {
       academicYear: academicYear,
       grades: gradeDetails,
       statistics: statistics,
-      generalAppreciation: req.body.generalAppreciation || 'Bulletin généré automatiquement',
-      isPublished: true,
-      publishedAt: new Date()
+      generalAppreciation: req.body.generalAppreciation || `Moyenne générale: ${generalAverage}/20 - ${mention}`,
+      isPublished: false,
+      publishedAt: null
     };
 
-    const bulletin = await Bulletin.create(bulletinData);
+    // Check if bulletin already exists
+    const existingBulletin = await Bulletin.findOne({
+      student: studentId,
+      trimester: trimester,
+      academicYear: academicYear
+    });
+
+    let bulletin;
+    if (existingBulletin) {
+      bulletin = await Bulletin.findByIdAndUpdate(
+        existingBulletin._id,
+        bulletinData,
+        { new: true, runValidators: true }
+      );
+    } else {
+      bulletin = await Bulletin.create(bulletinData);
+    }
 
     // Populate the response
     const populatedBulletin = await Bulletin.findById(bulletin._id)
       .populate('student', 'firstName lastName studentId')
-      .populate('class', 'name grade');
+      .populate('class', 'name grade level series');
 
     res.status(201).json({
       status: 'success',
-      message: 'Bulletin généré avec succès',
+      message: existingBulletin ? 'Bulletin mis à jour avec succès' : 'Bulletin généré avec succès',
       data: {
         bulletin: populatedBulletin
       }
@@ -159,36 +139,182 @@ exports.generateBulletin = async (req, res) => {
   }
 };
 
-// Get class bulletins
-exports.getClassBulletins = async (req, res) => {
+// Generate bulk bulletins for a class
+exports.generateBulkBulletins = async (req, res) => {
   try {
-    const { classId, trimester } = req.params;
+    const { classId, trimester, academicYear = '2024-2025' } = req.body;
 
-    console.log('Getting bulletins for class:', classId, 'trimester:', trimester);
+    console.log('Generating bulk bulletins for class:', classId, 'trimester:', trimester);
 
-    let query = { class: classId };
-    
-    if (trimester && trimester !== 'undefined') {
-      query.trimester = trimester;
+    const students = await Student.find({ class: classId })
+      .populate('class', 'name grade level series');
+
+    if (students.length === 0) {
+      return res.status(404).json({
+        status: 'error',
+        message: 'Aucun élève trouvé dans cette classe'
+      });
     }
 
-    const bulletins = await Bulletin.find(query)
-      .populate('student', 'firstName lastName studentId')
-      .populate('class', 'name grade')
-      .sort({ 'student.lastName': 1 });
+    let generated = 0;
+    let updated = 0;
+    let failed = 0;
+    const errors = [];
+
+    for (const student of students) {
+      try {
+        // Get grades for this student
+        const grades = await Grade.find({
+          student: student._id,
+          trimester: trimester
+        }).populate('subject', 'name code coefficient');
+
+        if (grades.length === 0) {
+          errors.push(`Aucune note pour ${student.firstName} ${student.lastName}`);
+          failed++;
+          continue;
+        }
+
+        // Calculate statistics
+        let totalNotes = 0;
+        let totalCoefficients = 0;
+        let completedSubjects = 0;
+        
+        const gradeDetails = grades.map(grade => {
+          const moyenne = grade.note || 0;
+          const coefficient = grade.coefficient || grade.subject?.coefficient || 1;
+          
+          if (grade.note !== null && grade.note !== undefined) {
+            totalNotes += moyenne * coefficient;
+            totalCoefficients += coefficient;
+            completedSubjects++;
+          }
+
+          return {
+            subject: grade.subject ? {
+              _id: grade.subject._id,
+              name: grade.subject.name,
+              code: grade.subject.code,
+              coefficient: grade.subject.coefficient
+            } : { name: 'Matière inconnue', coefficient: 1 },
+            interrogation1: grade.interrogation1,
+            interrogation2: grade.interrogation2,
+            interrogation3: grade.interrogation3,
+            composition: grade.composition,
+            moyenne: moyenne,
+            coefficient: coefficient,
+            appreciation: grade.appreciation || 'Non spécifié'
+          };
+        });
+
+        const generalAverage = totalCoefficients > 0 
+          ? parseFloat((totalNotes / totalCoefficients).toFixed(2)) 
+          : 0;
+
+        let mention = '';
+        if (generalAverage >= 16) mention = 'Très Bien';
+        else if (generalAverage >= 14) mention = 'Bien';
+        else if (generalAverage >= 12) mention = 'Assez Bien';
+        else if (generalAverage >= 10) mention = 'Passable';
+        else mention = 'Échec';
+
+        const statistics = {
+          average: generalAverage,
+          totalSubjects: grades.length,
+          completedSubjects: completedSubjects,
+          totalCoefficients: totalCoefficients,
+          mention: mention
+        };
+
+        // Check if bulletin already exists
+        const existingBulletin = await Bulletin.findOne({
+          student: student._id,
+          trimester: trimester,
+          academicYear: academicYear
+        });
+
+        const bulletinData = {
+          student: student._id,
+          class: classId,
+          trimester: trimester,
+          academicYear: academicYear,
+          grades: gradeDetails,
+          statistics: statistics,
+          generalAppreciation: `Moyenne générale: ${generalAverage}/20 - ${mention}`,
+          isPublished: false
+        };
+
+        if (existingBulletin) {
+          await Bulletin.findByIdAndUpdate(existingBulletin._id, bulletinData);
+          updated++;
+        } else {
+          await Bulletin.create(bulletinData);
+          generated++;
+        }
+        
+      } catch (err) {
+        errors.push(`Erreur pour ${student.firstName} ${student.lastName}: ${err.message}`);
+        failed++;
+      }
+    }
 
     res.status(200).json({
       status: 'success',
-      results: bulletins.length,
+      message: `Génération terminée: ${generated} nouveaux bulletins, ${updated} mis à jour, ${failed} échecs`,
       data: {
-        bulletins
+        generated,
+        updated,
+        failed,
+        total: students.length,
+        errors: errors.slice(0, 10)
       }
     });
   } catch (error) {
-    console.error('Get class bulletins error:', error);
+    console.error('Bulk bulletin generation error:', error);
     res.status(400).json({
       status: 'error',
       message: error.message
+    });
+  }
+};
+
+// Download bulletin as PDF
+exports.downloadBulletinPDF = async (req, res) => {
+  try {
+    const bulletin = await Bulletin.findById(req.params.id)
+      .populate('student', 'firstName lastName studentId dateOfBirth')
+      .populate('class', 'name grade level series')
+      .populate('school', 'name address');
+
+    if (!bulletin) {
+      return res.status(404).json({
+        status: 'error',
+        message: 'Bulletin non trouvé'
+      });
+    }
+
+    res.status(200).json({
+      status: 'success',
+      message: 'Bulletin prêt pour téléchargement',
+      data: {
+        bulletin: {
+          _id: bulletin._id,
+          student: bulletin.student,
+          class: bulletin.class,
+          school: bulletin.school,
+          trimester: bulletin.trimester,
+          academicYear: bulletin.academicYear,
+          grades: bulletin.grades,
+          statistics: bulletin.statistics,
+          generalAppreciation: bulletin.generalAppreciation
+        }
+      }
+    });
+  } catch (error) {
+    console.error('PDF download error:', error);
+    res.status(400).json({
+      status: 'error',
+      message: 'Erreur lors de la génération du PDF: ' + error.message
     });
   }
 };
@@ -204,12 +330,39 @@ exports.getAllBulletins = async (req, res) => {
     res.status(200).json({
       status: 'success',
       results: bulletins.length,
-      data: {
-        bulletins
-      }
+      data: { bulletins }
     });
   } catch (error) {
     console.error('Get all bulletins error:', error);
+    res.status(400).json({
+      status: 'error',
+      message: error.message
+    });
+  }
+};
+
+// Get class bulletins
+exports.getClassBulletins = async (req, res) => {
+  try {
+    const { classId, trimester } = req.params;
+
+    let query = { class: classId };
+    if (trimester && trimester !== 'undefined') {
+      query.trimester = trimester;
+    }
+
+    const bulletins = await Bulletin.find(query)
+      .populate('student', 'firstName lastName studentId')
+      .populate('class', 'name grade')
+      .sort({ 'student.lastName': 1 });
+
+    res.status(200).json({
+      status: 'success',
+      results: bulletins.length,
+      data: { bulletins }
+    });
+  } catch (error) {
+    console.error('Get class bulletins error:', error);
     res.status(400).json({
       status: 'error',
       message: error.message
@@ -222,18 +375,14 @@ exports.getStudentBulletins = async (req, res) => {
   try {
     const { studentId } = req.params;
 
-    console.log('Getting bulletins for student:', studentId);
-
     const bulletins = await Bulletin.find({ student: studentId })
       .populate('class', 'name grade')
-      .sort({ trimester: 1, academicYear: 1 });
+      .sort({ academicYear: -1, trimester: 1 });
 
     res.status(200).json({
       status: 'success',
       results: bulletins.length,
-      data: {
-        bulletins
-      }
+      data: { bulletins }
     });
   } catch (error) {
     console.error('Get student bulletins error:', error);
@@ -260,9 +409,7 @@ exports.getBulletin = async (req, res) => {
 
     res.status(200).json({
       status: 'success',
-      data: {
-        bulletin
-      }
+      data: { bulletin }
     });
   } catch (error) {
     console.error('Get bulletin error:', error);
@@ -296,9 +443,7 @@ exports.updateBulletin = async (req, res) => {
 
     res.status(200).json({
       status: 'success',
-      data: {
-        bulletin
-      }
+      data: { bulletin }
     });
   } catch (error) {
     console.error('Update bulletin error:', error);
@@ -356,9 +501,7 @@ exports.publishBulletin = async (req, res) => {
     res.status(200).json({
       status: 'success',
       message: 'Bulletin publié avec succès',
-      data: {
-        bulletin
-      }
+      data: { bulletin }
     });
   } catch (error) {
     console.error('Publish bulletin error:', error);
@@ -391,132 +534,10 @@ exports.unpublishBulletin = async (req, res) => {
     res.status(200).json({
       status: 'success',
       message: 'Bulletin dépublié avec succès',
-      data: {
-        bulletin
-      }
+      data: { bulletin }
     });
   } catch (error) {
     console.error('Unpublish bulletin error:', error);
-    res.status(400).json({
-      status: 'error',
-      message: error.message
-    });
-  }
-};
-
-// Generate bulk bulletins
-exports.generateBulkBulletins = async (req, res) => {
-  try {
-    const { classId, trimester, academicYear = '2024-2025' } = req.body;
-
-    console.log('Generating bulk bulletins for class:', classId, 'trimester:', trimester);
-
-    const students = await Student.find({ class: classId })
-      .populate('class', 'name grade');
-
-    if (students.length === 0) {
-      return res.status(404).json({
-        status: 'error',
-        message: 'Aucun élève trouvé dans cette classe'
-      });
-    }
-
-    let generated = 0;
-    let failed = 0;
-    const errors = [];
-
-    for (const student of students) {
-      try {
-        // Check if bulletin already exists
-        const existingBulletin = await Bulletin.findOne({
-          student: student._id,
-          class: classId,
-          trimester: trimester
-        });
-
-        if (existingBulletin) {
-          errors.push(`Bulletin existe déjà pour ${student.firstName} ${student.lastName}`);
-          failed++;
-          continue;
-        }
-
-        // Get grades for this student
-        const grades = await Grade.find({
-          student: student._id,
-          trimester: trimester
-        }).populate('subject', 'name code coefficient');
-
-        if (grades.length === 0) {
-          errors.push(`Aucune note pour ${student.firstName} ${student.lastName}`);
-          failed++;
-          continue;
-        }
-
-        // Calculate statistics
-        let totalNotes = 0;
-        let totalCoefficients = 0;
-        
-        const gradeDetails = grades.map(grade => {
-          const note = grade.note || 0;
-          const coefficient = grade.coefficient || grade.subject?.coefficient || 1;
-          
-          totalNotes += note * coefficient;
-          totalCoefficients += coefficient;
-
-          return {
-            subject: grade.subject ? {
-              _id: grade.subject._id,
-              name: grade.subject.name,
-              code: grade.subject.code,
-              coefficient: grade.subject.coefficient
-            } : { name: 'Matière inconnue', coefficient: 1 },
-            note: note,
-            coefficient: coefficient,
-            appreciation: grade.appreciation || 'Non spécifié'
-          };
-        });
-
-        const average = totalCoefficients > 0 ? (totalNotes / totalCoefficients).toFixed(2) : 0;
-
-        const statistics = {
-          average: parseFloat(average),
-          totalSubjects: grades.length,
-          totalNotes: totalNotes,
-          totalCoefficients: totalCoefficients
-        };
-
-        // Create bulletin
-        const bulletinData = {
-          student: student._id,
-          class: classId,
-          trimester: trimester,
-          academicYear: academicYear,
-          grades: gradeDetails,
-          statistics: statistics,
-          generalAppreciation: 'Bulletin généré en masse',
-          isPublished: false
-        };
-
-        await Bulletin.create(bulletinData);
-        generated++;
-        
-      } catch (err) {
-        errors.push(`Erreur pour ${student.firstName} ${student.lastName}: ${err.message}`);
-        failed++;
-      }
-    }
-
-    res.status(200).json({
-      status: 'success',
-      message: `Génération terminée: ${generated} bulletins générés, ${failed} échecs`,
-      data: {
-        generated,
-        failed,
-        errors: errors.slice(0, 10) // Limit errors in response
-      }
-    });
-  } catch (error) {
-    console.error('Bulk bulletin generation error:', error);
     res.status(400).json({
       status: 'error',
       message: error.message

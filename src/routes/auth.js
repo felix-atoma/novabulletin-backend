@@ -22,12 +22,13 @@ router.get('/pending-registrations',
   authController.getPendingRegistrations
 );
 
-router.patch('/approve-registration/:userId', 
+// Changed from PATCH to POST to match frontend
+router.post('/approve-registration/:userId', 
   authController.restrictTo('admin', 'director'), 
   authController.approveRegistration
 );
 
-router.patch('/reject-registration/:userId', 
+router.post('/reject-registration/:userId', 
   authController.restrictTo('admin', 'director'), 
   authController.rejectRegistration
 );
@@ -41,12 +42,16 @@ router.post('/forgot-password', async (req, res) => {
   });
 });
 
-router.patch('/reset-password/:token', async (req, res) => {
+router.post('/reset-password/:token', async (req, res) => {
   // TODO: Implement password reset functionality
   res.status(200).json({
     status: 'success',
     message: 'Mot de passe réinitialisé avec succès'
   });
 });
+
+// Password and profile management
+router.put('/change-password', authController.changePassword);
+router.put('/profile', authController.updateProfile);
 
 module.exports = router;
